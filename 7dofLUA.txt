@@ -1,0 +1,61 @@
+function sysCall_init()
+    -- Take a few handles from the scene:
+    simBase=sim.getObject('.')
+    simTip=sim.getObject('./tip')
+    simTarget=sim.getObject('./target')
+    
+    simManipSphere=sim.getObject('./manipSphere')
+    
+    ikEnv=simIK.createEnvironment()
+    
+    -- Prepare the 2 ik groups, using the convenience function 'simIK.addIkElementFromScene':
+
+    ikGroup_undamped=simIK.createIkGroup(ikEnv)
+    simIK.setIkGroupCalculation(ikEnv,ikGroup_undamped,simIK.method_pseudo_inverse,0,10)
+    simIK.addIkElementFromScene(ikEnv,ikGroup_undamped,simBase,simTip,simTarget,simIK.constraint_pose)
+    ikGroup_damped=simIK.createIkGroup(ikEnv)
+    simIK.setIkGroupCalculation(ikEnv,ikGroup_damped,simIK.method_damped_least_squares,0.3,99)
+    simIK.addIkElementFromScene(ikEnv,ikGroup_damped,simBase,simTip,simTarget,simIK.constraint_pose)
+
+    -- create ROS2 pub -> target's current position
+    publisher = simROS2.createPublisher('/calloutx', 'std_msgs/msg/Float32')
+    
+    -- create ROS2 sub -> recieve orders from external
+    subscriber = simROS2.createSubscription('/commandx', 'std_msgs/msg/Float32', 'subscriber_callback')
+
+end
+
+buffer = 0
+function subscriber_callback(msg)
+    --sim.addLog(sim.verbosity_scriptinfos,'subscriber receiver following Float32: ' ..msg.data)
+    buffer = msg.data
+end
+
+-- LOOP FUNC -------------------------------------------------
+function sysCall_actuation()
+
+    if simIK.applyIkEnvironmentToScene(ikEnv,ikGroup_undamped,true)~=simIK.result_success then
+        simIK.applyIkEnvironmentToScene(ikEnv,ikGroup_damped)
+    end
+    
+    -- pull position of the target obj in float[3]
+    targetPos = sim.getObjectPosition(simManipSphere, simBase)
+    --print(targetPos[1])
+    
+    -- call out position of target into the /calloutx topic
+    local temp_msg={}
+    temp_msg.data=targetPos[1]
+    simROS2.publish(publisher,temp_msg)
+    
+    -- set buffered message data to targetPos component
+    targetPos[1] = buffer
+    sim.setObjectPosition(simManipSphere, simBase, targetPos)
+    print(buffer)
+    
+end
+
+function sysCall_cleanup()
+    simIK.eraseEnvironment(ikEnv)
+    simROS2.shutdownSubscription(subscriber)
+    simROS2.shutdownPublisher(publisher)
+end
